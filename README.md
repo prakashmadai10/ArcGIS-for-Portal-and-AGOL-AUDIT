@@ -215,5 +215,49 @@ Optional (auto-detected if present):
 * Optional export of skipped layers under `./audit_exports_unchanged_data/`
 
 ---
+What it’s used for (practical use cases)
 
-If you paste your actual file list (repo tree) I can rewrite this README to match **your exact filenames** 1:1 and include a diagram (audit flow + module interactions).
+Typical uses include:
+
+1) Governance / Inventory checks (one-off reports)
+
+List all hosted services that are:
+
+public
+
+shared to org
+
+shared to specific groups
+
+Identify services that violate policy (e.g., public when they shouldn’t be)
+
+2) Troubleshooting audit results
+
+When the audit shows created_user / last_edited_user as NULL:
+
+confirm whether tracking fields exist
+
+confirm whether the fields are populated
+
+verify whether the layer is a view or source
+
+quickly inspect schema without running the full audit
+
+3) Admin diagnostics for collaboration / content lifecycle
+
+identify services in collaboration groups
+
+identify items missing the collab tag
+
+validate tag-based filtering works before an audit run
+
+4) Targeted remediation / quality control
+
+Instead of running changes org-wide, you can isolate:
+
+only items in a group
+
+only items updated in last X days
+
+only items with missing schema properties
+then validate safely.
