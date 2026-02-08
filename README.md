@@ -1,69 +1,75 @@
-````md
-# 🛰️ ArcGIS Audit Uploader (AGOL + ArcGIS Enterprise)
+# 🛰️ ArcGIS Audit Script (AGOL + ArcGIS Enterprise)
 
-Audit **Feature Services + sublayers** across **ArcGIS Online** and **ArcGIS Enterprise**, then write a clean “snapshot” of key metadata (owner, edit dates, feature counts, authoritative flag, etc.) into a **hosted audit table** (FeatureServer table). :contentReference[oaicite:0]{index=0}
+This repository contains a **Python-based auditing automation** for **ArcGIS Online (AGOL)** and **ArcGIS Enterprise**.
+It scans **Feature Services and their sublayers**, captures key metadata and statistics, and writes a clean audit snapshot into a **hosted audit table** (FeatureServer table).
 
-This is useful when you want:
-- A single **inventory + health view** of services across portals
-- Monthly / fiscal year reporting (FY) and “what changed” tracking
-- Automated logging + exports for skipped/unchanged layers
+Designed for **GIS administrators, data governance teams, and enterprise reporting**.
 
 ---
 
-## ✅ What this script audits
+## 🎯 What this script does
 
-For each **Feature Service** (and each **sublayer** inside it), the script collects:
+For every **Feature Service** and **each sublayer**, the script audits and records:
 
-- Portal source (`ArcGIS Online` or `ArcGIS Enterprise`)
-- Item title + Item ID
-- Owner
-- Created / updated timestamps (item + data + schema)
-- Last edited user + created user (via editor tracking fields if available)
-- Total feature count
-- Authoritative flag (based on content status)
-- Fiscal Year (FY) + report month
-- Run metadata (run id, timestamp, label, timezone)
+* Portal source (AGOL or Enterprise)
+* Item title and Item ID
+* Sublayer name and sublayer ID
+* Owner
+* Item URL
+* Feature count
+* Change in feature count since last run (delta)
+* Created, updated, schema-updated timestamps
+* Last edited user and created user (editor tracking)
+* Authoritative status
+* Fiscal Year (FY) and report month
+* Run metadata (run ID, timestamp, timezone)
 
-Optional fields are auto-detected from your audit table schema (if they exist), such as:
-- `sub_layer_name`, `sub_layer_id`, `owner`, `item_url`, `delta_features` :contentReference[oaicite:1]{index=1}
+All results are **written to a hosted audit table** for dashboards, QA/QC, or compliance reporting.
 
 ---
 
-## ⚙️ How it works (pipeline)
+## 🧠 Why this is useful
 
-1. **Connect to both portals** using credentials from `.env` :contentReference[oaicite:2]{index=2}  
-2. **Validate the hosted audit table** (must allow Create/edit) and detect optional fields :contentReference[oaicite:3]{index=3}  
-3. **Collect all Feature Services** from each portal (parallel) and extract sublayer details :contentReference[oaicite:4]{index=4}  
-   - AGOL: keeps only **hosted source layers** (excludes views)
-   - AGOL: skips collaboration/reference services and “collab” tagged items
-4. (Optional) **Compute delta feature counts** using previous run’s stored counts :contentReference[oaicite:5]{index=5}  
-5. (Optional) If `FIRST_RUN = False`, **skip unchanged layers** and export them to CSV :contentReference[oaicite:6]{index=6}  
-6. Transform/clean values for upload (dates → epoch ms, NaN → None, optional item URL building) :contentReference[oaicite:7]{index=7}  
-7. Upload records to the audit table in **batches** (default 2000) :contentReference[oaicite:8]{index=8}  
-8. Write a log file and auto-clean old logs/exports :contentReference[oaicite:9]{index=9}  
+* 📋 Centralized inventory of GIS services
+* 🔍 Detect silent changes in production layers
+* 📊 Feed ArcGIS Dashboards or BI tools
+* 🧾 Support annual, quarterly, or FY reporting
+* ⚙️ Reduce manual portal audits
+
+---
+
+## ⚙️ How it works (high level)
+
+1. Connects to **ArcGIS Online** and **ArcGIS Enterprise**
+2. Validates the audit table (must allow Create)
+3. Collects all Feature Services and their sublayers
+4. Filters out:
+
+   * Feature views
+   * Referenced services
+   * Collaboration-tagged items (`collab`)
+5. Compares feature counts with the previous run
+6. Uploads new audit records in batches
+7. Logs everything and exports skipped (unchanged) layers
 
 ---
 
 ## 📦 Requirements
 
-- Python 3.9+
-- ArcGIS API for Python
-- pandas, numpy
-- python-dotenv
-- pytz
-
-Install (example):
-```bash
-pip install arcgis pandas numpy python-dotenv pytz
-````
+* Python 3.9+
+* ArcGIS API for Python
+* pandas
+* numpy
+* python-dotenv
+* pytz
 
 ---
 
-## 🔐 Create your `.env`
+## 🔐 Environment setup (`.env`)
 
-Create a file named `.env` in the same folder as `main.py`:
+Create a `.env` file in the project root:
 
-```env
+```
 # ArcGIS Online
 PORTAL_URL=https://www.arcgis.com
 USERNAME=your_agol_username
@@ -75,207 +81,92 @@ USERNAME1=your_enterprise_username
 PASSWORD1=your_enterprise_password
 ```
 
-> Tip: use an admin/service account if you want to audit everything consistently.
+> 💡 Use an admin or service account for full visibility.
 
 ---
 
-## 🧾 Configure the run
+## 🏃 How to run
 
-Open `config_context.py` and adjust:
+1. Update the **audit table URL** in `main.py`
+2. (Optional) Configure run behavior in `config_context.py`
+3. Run:
 
-* `TEST_MODE` (True = single item only)
-* `TEST_ITEM_ID` (item id used in test mode)
-* `MAX_ITEMS`, `MAX_WORKERS`
-* `BATCH_SIZE`
-* `FIRST_RUN` (True uploads everything; False enables “skip unchanged” mode)
-* Timezone defaults to `America/Chicago` 
-
----
-
-## 🏃 Run the audit
-
-### Option A — Run directly
-
-```bash
+```
 python main.py
 ```
 
-### Option B — Update the audit table URL in `main.py`
+---
 
-Set this to your hosted table layer (FeatureServer/0):
+## 🧪 Sample audit table output (dummy data)
 
-```python
-AUDIT_TABLE_URL = "https://services.arcgis.com/.../FeatureServer/0"
-```
+Below is an example of what gets written to the **audit FeatureServer table**.
 
+| portal     | layer_name          | sub_layer_name | sub_layer_id | owner      | item_id  | item_url                                                                                                     | total_features | delta_features | is_authoritative | FY   | report_month |
+| ---------- | ------------------- | -------------- | ------------ | ---------- | -------- | ------------------------------------------------------------------------------------------------------------ | -------------- | -------------- | ---------------- | ---- | ------------ |
+| AGOL       | Water Utilities     | Hydrants       | 0            | gis_admin  | a1b2c3d4 | [https://services.arcgis.com/xxx/FeatureServer/0](https://services.arcgis.com/xxx/FeatureServer/0)           | 2,415          | +32            | Yes              | FY26 | Feb          |
+| AGOL       | Water Utilities     | Valves         | 1            | gis_admin  | a1b2c3d4 | [https://services.arcgis.com/xxx/FeatureServer/1](https://services.arcgis.com/xxx/FeatureServer/1)           | 1,108          | 0              | Yes              | FY26 | Feb          |
+| Enterprise | Public Works Assets | Street Signs   | 2            | pw_editor  | z9y8x7w6 | [https://portal.domain.com/server/rest/services/.../2](https://portal.domain.com/server/rest/services/.../2) | 18,450         | -12            | No               | FY26 | Feb          |
+| Enterprise | Code Enforcement    | Open Cases     | 0            | code_admin | q4r5t6u7 | [https://portal.domain.com/server/rest/services/.../0](https://portal.domain.com/server/rest/services/.../0) | 3,902          | +145           | Yes              | FY26 | Feb          |
 
+**Notes**
+
+* `delta_features` shows change since the previous audit run
+* `0` means no change
+* Negative values indicate deletions or cleanup
+* Values are auto-calculated if `delta_features` exists in the schema
 
 ---
 
-## 🧠 Notes on AGOL filtering (important)
+## 📤 Generated outputs
 
-This script intentionally avoids “noise” in AGOL results:
+### 🪵 Logs
 
-* Skips **referenced** services (not true hosted services)
-* Skips items tagged `collab` (useful for distributed collaboration environments)
-* Keeps only **hosted source Feature Services** (not views)
+Stored in `/logs/`
+Automatically cleaned after 7 days.
 
-This logic lives in `collector.py`. 
+### 📄 Skipped layers export
 
----
-
-## 🏷️ Optional: auto-tag “collab” items in AGOL groups
-
-If you maintain specific AGOL groups for collaboration items, the script includes a helper to tag items in those groups with `collab`. That helps the collector skip them automatically later. 
-
-The tagging function is in `update_tags_groups_items.py` (called from `main.py`). 
-
----
-
-## 📤 Output artifacts
-
-### 1) Logs
-
-A log file is created under:
-
-```
-/logs/audit_log_YYYYMMDD_HHMMSS.txt
-```
-
-Old logs auto-delete after 7 days. 
-
-### 2) Exported “skipped unchanged layers” (when FIRST_RUN = False)
+If `FIRST_RUN = False`, unchanged layers are exported to CSV:
 
 ```
 /audit_exports_unchanged_data/skipped_layers_YYYYMMDD_HHMMSS.csv
 ```
 
-Old exports auto-delete after 7 days. 
-
-### 3) Audit table updates
-
-Records are uploaded in batches to your hosted audit table. 
-
----
-
-## 🧪 Sample console output (example)
-
-> Your numbers/titles will differ—this is the typical flow:
-
-```text
-🪵 Logging started → .../logs/audit_log_20260208_104455.txt
-
-============================================================
-🚀 Edit Audit Run: 2026-02-08 10:44 AM CST
-🔹 Run ID: 7f5d4a3d-8dbb-4b9b-8f34-8c7d1b2a91c0
-🔹 Mode: PRODUCTION (All Items)
-============================================================
-
-🧩 Connected: https://services.arcgis.com/.../FeatureServer/0
-✅ Editing enabled.
-📋 Optional fields: sub_layer_name=True, sub_layer_id=True, owner=True, item_url=True, delta_features=True
-
-📥 Fetching previous feature counts for delta calculation...
-   ✅ Found previous counts for 312 layers
-
-🔄 Starting parallel data collection from both portals...
-
-🔎 [ArcGIS Enterprise] Searching Feature Services...
-✅ [ArcGIS Enterprise] Public Works - Assets: 6 sublayers (Δ: +12, +0, -3)
-🏁 [ArcGIS Enterprise] Collected 420 records
-
-🔎 [ArcGIS Online] Searching Feature Services...
-🔎 [ArcGIS Online] Found 860 Feature Services → kept 510 hosted sources (views removed).
-⏭️ [ArcGIS Online] Skipping collab-tagged item: Shared Hydrants
-✅ [ArcGIS Online] Parks - Inspections: 2 sublayers (Δ: +5, +0)
-🏁 [ArcGIS Online] Collected 380 records
-
-📊 Transforming 800 records...
-✅ Transformation complete
-
-🚀 Uploading 800 records in batches of 2000...
-
-🟢 Batch 1 (800 records, 1-800 of 800)...
-   ✅ All 800 records uploaded
-
-============================================================
-🏁 AUDIT UPLOAD COMPLETE
-============================================================
-📅 Fiscal Year: FY26
-⏰ Completed: 2026-02-08 10:46 AM CST
-🔹 Mode: PRODUCTION
-📊 Processed: 800
-✅ Succeeded: 800
-🔹 Run ID: 7f5d4a3d-8dbb-4b9b-8f34-8c7d1b2a91c0
-============================================================
-⏱️ Total Runtime: 1m 22s
-```
-
----
-
-## 🧩 Audit table schema (recommended)
-
-Minimum required fields (must exist):
-
-* `portal`
-* `layer_name`
-* `item_id`
-* `FY`
-* `last_edited_user`
-* `created_user`
-* `item_created`
-* `item_updated`
-* `data_updated`
-* `schema_updated`
-* `report_month`
-* `total_features`
-* `is_authoritative`
-* `run_timestamp`
-* `data_run_label`
-* `edit_run_id`
-* `time_zone`
-
-Optional fields (script detects automatically if present):
-
-* `sub_layer_name`, `sub_layer_id`, `owner`, `item_url`, `delta_features` 
-
----
-
-## 🛠️ Troubleshooting
-
-### “Editing not enabled for this table”
-
-Your audit table must support “Create” edits. The validator checks capabilities and exits if Create is missing. 
-
-### No records uploaded / no data collected
-
-* Verify credentials in `.env`
-* Confirm both portals are reachable
-* Try `TEST_MODE=True` with a known `TEST_ITEM_ID` 
-
-### Delta features always 0
-
-* Ensure your audit table has `delta_features`
-* Make sure it’s not the first run (previous records must exist for delta comparisons) 
-
 ---
 
 ## 📁 Project structure
 
-* `main.py` — entry point (connect, collect, transform, upload, summary) 
-* `collector.py` — searches items, collects sublayer metadata (parallelized) 
-* `audit_table_io.py` — validate table, previous snapshot, batch upload 
-* `transform_filter.py` — transforms dates, builds URLs, skip unchanged exports 
-* `fields_edit.py` — detects editor tracking fields + extracts edit users/dates 
-* `logging_utils.py` — log tee + cleanup old logs/exports 
-* `time_utils.py` — timezone-safe timestamp helpers + FY logic 
-* `update_tags_groups_items.py` — optional group-based tagging helper 
+* `main.py` – Entry point and orchestration
+* `collector.py` – Searches portals and collects sublayer data
+* `audit_table_io.py` – Validates audit table and uploads records
+* `transform_filter.py` – Data cleanup, delta logic, exports
+* `fields_edit.py` – Editor tracking field detection
+* `logging_utils.py` – Logging and cleanup
+* `time_utils.py` – Fiscal year and timezone handling
+* `update_tags_groups_items.py` – Optional helper for tagging collaboration items
 
 ---
 
-## 📌 License / Usage
+## 🛠️ Common issues
 
-Internal automation / ops tooling. Customize freely for your org’s audit table schema and reporting needs.
+**No records uploaded**
 
-```
-```
+* Check credentials in `.env`
+* Ensure audit table allows Create
+* Try `TEST_MODE = True` with a known item ID
+
+**Delta always zero**
+
+* Confirm previous audit data exists
+* Ensure `delta_features` field exists in the table
+
+---
+
+## 📌 Intended use
+
+Enterprise GIS operations, internal audits, governance automation, and production monitoring.
+
+Feel free to adapt the schema or extend it with dashboards and alerts.
+
+---
+
