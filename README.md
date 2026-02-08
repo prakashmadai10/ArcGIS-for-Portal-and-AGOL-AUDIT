@@ -1,263 +1,281 @@
-# ArcGIS Feature Service Audit Tool (Modular)
+````md
+# 🛰️ ArcGIS Audit Uploader (AGOL + ArcGIS Enterprise)
 
-Tracks editing activity and service metadata across **ArcGIS Enterprise** and **ArcGIS Online**, then writes results into a hosted **Audit Table**.
-Designed for **large org-wide inventories** with optimized batching, caching, and parallel collection.
+Audit **Feature Services + sublayers** across **ArcGIS Online** and **ArcGIS Enterprise**, then write a clean “snapshot” of key metadata (owner, edit dates, feature counts, authoritative flag, etc.) into a **hosted audit table** (FeatureServer table). :contentReference[oaicite:0]{index=0}
 
-## What this tool captures
-
-* Item + layer identifiers (portal, item id, sublayer id/name)
-* Data and schema “last updated” timestamps
-* Feature counts + delta from previous run (optional)
-* Editor tracking values (Creator / Editor) **only when fields exist**
-* Service URL + Item URL
-* Optional: Sharing level + group sharing (if fields exist in audit table)
-* Skips uploads for unchanged layers (configurable rule)
+This is useful when you want:
+- A single **inventory + health view** of services across portals
+- Monthly / fiscal year reporting (FY) and “what changed” tracking
+- Automated logging + exports for skipped/unchanged layers
 
 ---
 
-## Repository layout
+## ✅ What this script audits
 
-### `main.py`
+For each **Feature Service** (and each **sublayer** inside it), the script collects:
 
-**Entry point.**
+- Portal source (`ArcGIS Online` or `ArcGIS Enterprise`)
+- Item title + Item ID
+- Owner
+- Created / updated timestamps (item + data + schema)
+- Last edited user + created user (via editor tracking fields if available)
+- Total feature count
+- Authoritative flag (based on content status)
+- Fiscal Year (FY) + report month
+- Run metadata (run id, timestamp, label, timezone)
 
-* Connects to AGOL + Enterprise (from `.env`)
-* Validates audit table schema (detects optional fields)
-* Loads previous snapshot / previous counts (for delta)
-* Collects layer records from both portals (parallel)
-* Filters unchanged layers (delta-only or date+delta)
-* Transforms data for upload (epoch ms + NaN → None)
-* Uploads to hosted audit table in batches
-
----
-
-### `config_context.py`
-
-Central configuration + run metadata.
-
-* `Config` dataclass: workers, batch size, test mode, timezone, retention days
-* `RunContext`: run id, run label, run timestamp (ms), local/utc time helpers
+Optional fields are auto-detected from your audit table schema (if they exist), such as:
+- `sub_layer_name`, `sub_layer_id`, `owner`, `item_url`, `delta_features` :contentReference[oaicite:1]{index=1}
 
 ---
 
-### `logger_utils.py`
+## ⚙️ How it works (pipeline)
 
-Logging + housekeeping utilities.
-
-* Tee logging (console + file)
-* Log folder creation
-* Cleanup old logs / exports by retention settings
-
----
-
-### `time_utils.py`
-
-Fast timestamp conversions (optimized + cached).
-
-* `ms_to_datetime(ms)` cached conversion to local datetime
-* `datetime_to_epoch(dt)` converts any datetime-like into epoch ms safely
-* Fiscal year helpers (`get_fiscal_year`, cached variants)
-* Month floor helper for reporting month grouping
+1. **Connect to both portals** using credentials from `.env` :contentReference[oaicite:2]{index=2}  
+2. **Validate the hosted audit table** (must allow Create/edit) and detect optional fields :contentReference[oaicite:3]{index=3}  
+3. **Collect all Feature Services** from each portal (parallel) and extract sublayer details :contentReference[oaicite:4]{index=4}  
+   - AGOL: keeps only **hosted source layers** (excludes views)
+   - AGOL: skips collaboration/reference services and “collab” tagged items
+4. (Optional) **Compute delta feature counts** using previous run’s stored counts :contentReference[oaicite:5]{index=5}  
+5. (Optional) If `FIRST_RUN = False`, **skip unchanged layers** and export them to CSV :contentReference[oaicite:6]{index=6}  
+6. Transform/clean values for upload (dates → epoch ms, NaN → None, optional item URL building) :contentReference[oaicite:7]{index=7}  
+7. Upload records to the audit table in **batches** (default 2000) :contentReference[oaicite:8]{index=8}  
+8. Write a log file and auto-clean old logs/exports :contentReference[oaicite:9]{index=9}  
 
 ---
 
-### `fields_edit.py`
+## 📦 Requirements
 
-Editor tracking field detection + user lookup.
+- Python 3.9+
+- ArcGIS API for Python
+- pandas, numpy
+- python-dotenv
+- pytz
 
-* `EditFieldDetector.detect(layer)`
-  Detects actual editor tracking field names using:
-
-  * `editFieldsInfo` if present
-  * fallback scan of schema fields (`Creator`, `Editor`, `CreationDate`, `EditDate`, plus variants)
-  * cached by `layer.url` to reduce repeated work
-* `get_last_creator(layer)` / `get_last_editor(layer)`
-  Returns most recent creator/editor **only if fields exist and values are present**
-* `has_editor_tracking(layer)`
-  Checks tracking availability using BOTH:
-
-  * detected mapping (`EditFieldDetector`)
-  * physical schema check (`Creator/CreationDate/Editor/EditDate`)
-
-> No fallback to item owner (audit integrity preserved).
-
----
-
-### `audit_table_io.py`
-
-Audit table validation + previous-run retrieval + upload.
-
-* `validate_audit_table(audit_table_url, gis)`
-
-  * connects to hosted table
-  * checks Create capability
-  * detects optional fields like:
-
-    * `sub_layer_id`, `sub_layer_name`
-    * `item_url`, `service_url`
-    * `delta_features`
-    * `sharing`, `shared_groups` (if enabled in your schema)
-* `get_last_run_snapshot(audit_table)`
-  Loads last known record per (portal, item_id, sub_layer_id) for comparisons
-* `get_previous_counts(audit_table, run_timestamp)`
-  Builds lookup dict for delta calculation
-* `upload_records(audit_table, records, batch_size)`
-  Adds rows in batches with partial failure reporting
-
----
-
-### `collector.py`
-
-Core data collection engine.
-
-* Searches feature services from each portal
-* Filters out **AGOL View Services** (keeps only hosted source layers)
-* Iterates through FeatureLayerCollection layers and builds one record per sublayer
-* Extracts:
-
-  * service URL, layer URL (optional)
-  * item created/modified times
-  * data/schema “last edit” info with fallbacks
-  * feature counts + delta
-  * creator/editor values **only when tracking exists**
-* Parallelized with `ThreadPoolExecutor`
-
----
-
-### `transform.py` (or `data_transform.py`)
-
-Final transformation step before upload.
-
-* Converts datetime columns → epoch milliseconds (UTC)
-* Converts **NaN/inf → None** (required to avoid SQL Server float errors)
-* Formats `report_month` (`YYYY-MM`)
-* Builds item URLs if `item_url` exists in audit table
-* Optional stats output (delta summary)
-
-> This file is where you fixed the error:
-> `Parameter ("@schema_updated"): value is not a valid instance of float`
-> by forcing `None` instead of NaN.
-
----
-
-### `filters.py` (optional)
-
-Filtering logic for upload reduction.
-
-Common modes:
-
-* **Delta-only mode (recommended)**: upload only when `delta_features != 0` or item is new
-* **Date + delta mode**: upload if any timestamps changed OR delta != 0
-
----
-
-## Configuration
-
-### `.env` (local only – DO NOT commit)
-
-Example keys:
-
+Install (example):
 ```bash
+pip install arcgis pandas numpy python-dotenv pytz
+````
+
+---
+
+## 🔐 Create your `.env`
+
+Create a file named `.env` in the same folder as `main.py`:
+
+```env
+# ArcGIS Online
 PORTAL_URL=https://www.arcgis.com
 USERNAME=your_agol_username
 PASSWORD=your_agol_password
 
-PORTAL_URL1=https://your-enterprise-portal-url/portal
+# ArcGIS Enterprise
+PORTAL_URL1=https://your-enterprise-portal.domain.com/portal
 USERNAME1=your_enterprise_username
 PASSWORD1=your_enterprise_password
 ```
 
+> Tip: use an admin/service account if you want to audit everything consistently.
+
 ---
 
-## Audit table requirements
+## 🧾 Configure the run
 
-Your hosted Audit Table should include required fields such as:
+Open `config_context.py` and adjust:
+
+* `TEST_MODE` (True = single item only)
+* `TEST_ITEM_ID` (item id used in test mode)
+* `MAX_ITEMS`, `MAX_WORKERS`
+* `BATCH_SIZE`
+* `FIRST_RUN` (True uploads everything; False enables “skip unchanged” mode)
+* Timezone defaults to `America/Chicago` 
+
+---
+
+## 🏃 Run the audit
+
+### Option A — Run directly
+
+```bash
+python main.py
+```
+
+### Option B — Update the audit table URL in `main.py`
+
+Set this to your hosted table layer (FeatureServer/0):
+
+```python
+AUDIT_TABLE_URL = "https://services.arcgis.com/.../FeatureServer/0"
+```
+
+
+
+---
+
+## 🧠 Notes on AGOL filtering (important)
+
+This script intentionally avoids “noise” in AGOL results:
+
+* Skips **referenced** services (not true hosted services)
+* Skips items tagged `collab` (useful for distributed collaboration environments)
+* Keeps only **hosted source Feature Services** (not views)
+
+This logic lives in `collector.py`. 
+
+---
+
+## 🏷️ Optional: auto-tag “collab” items in AGOL groups
+
+If you maintain specific AGOL groups for collaboration items, the script includes a helper to tag items in those groups with `collab`. That helps the collector skip them automatically later. 
+
+The tagging function is in `update_tags_groups_items.py` (called from `main.py`). 
+
+---
+
+## 📤 Output artifacts
+
+### 1) Logs
+
+A log file is created under:
+
+```
+/logs/audit_log_YYYYMMDD_HHMMSS.txt
+```
+
+Old logs auto-delete after 7 days. 
+
+### 2) Exported “skipped unchanged layers” (when FIRST_RUN = False)
+
+```
+/audit_exports_unchanged_data/skipped_layers_YYYYMMDD_HHMMSS.csv
+```
+
+Old exports auto-delete after 7 days. 
+
+### 3) Audit table updates
+
+Records are uploaded in batches to your hosted audit table. 
+
+---
+
+## 🧪 Sample console output (example)
+
+> Your numbers/titles will differ—this is the typical flow:
+
+```text
+🪵 Logging started → .../logs/audit_log_20260208_104455.txt
+
+============================================================
+🚀 Edit Audit Run: 2026-02-08 10:44 AM CST
+🔹 Run ID: 7f5d4a3d-8dbb-4b9b-8f34-8c7d1b2a91c0
+🔹 Mode: PRODUCTION (All Items)
+============================================================
+
+🧩 Connected: https://services.arcgis.com/.../FeatureServer/0
+✅ Editing enabled.
+📋 Optional fields: sub_layer_name=True, sub_layer_id=True, owner=True, item_url=True, delta_features=True
+
+📥 Fetching previous feature counts for delta calculation...
+   ✅ Found previous counts for 312 layers
+
+🔄 Starting parallel data collection from both portals...
+
+🔎 [ArcGIS Enterprise] Searching Feature Services...
+✅ [ArcGIS Enterprise] Public Works - Assets: 6 sublayers (Δ: +12, +0, -3)
+🏁 [ArcGIS Enterprise] Collected 420 records
+
+🔎 [ArcGIS Online] Searching Feature Services...
+🔎 [ArcGIS Online] Found 860 Feature Services → kept 510 hosted sources (views removed).
+⏭️ [ArcGIS Online] Skipping collab-tagged item: Shared Hydrants
+✅ [ArcGIS Online] Parks - Inspections: 2 sublayers (Δ: +5, +0)
+🏁 [ArcGIS Online] Collected 380 records
+
+📊 Transforming 800 records...
+✅ Transformation complete
+
+🚀 Uploading 800 records in batches of 2000...
+
+🟢 Batch 1 (800 records, 1-800 of 800)...
+   ✅ All 800 records uploaded
+
+============================================================
+🏁 AUDIT UPLOAD COMPLETE
+============================================================
+📅 Fiscal Year: FY26
+⏰ Completed: 2026-02-08 10:46 AM CST
+🔹 Mode: PRODUCTION
+📊 Processed: 800
+✅ Succeeded: 800
+🔹 Run ID: 7f5d4a3d-8dbb-4b9b-8f34-8c7d1b2a91c0
+============================================================
+⏱️ Total Runtime: 1m 22s
+```
+
+---
+
+## 🧩 Audit table schema (recommended)
+
+Minimum required fields (must exist):
 
 * `portal`
-* `item_id`
 * `layer_name`
-* `run_timestamp`
+* `item_id`
+* `FY`
+* `last_edited_user`
+* `created_user`
+* `item_created`
+* `item_updated`
 * `data_updated`
 * `schema_updated`
+* `report_month`
 * `total_features`
-* etc.
+* `is_authoritative`
+* `run_timestamp`
+* `data_run_label`
+* `edit_run_id`
+* `time_zone`
 
-Optional (auto-detected if present):
+Optional fields (script detects automatically if present):
 
-* `sub_layer_id`, `sub_layer_name`
-* `item_url`
-* `service_url`
-* `delta_features`
-* `sharing`
-* `shared_groups`
-
----
-
-## Run modes
-
-* **TEST_MODE**: run only one service by item id
-* **FIRST_RUN**: process all services and load initial snapshot
-* **Incremental runs**: skip unchanged layers (delta-only recommended)
+* `sub_layer_name`, `sub_layer_id`, `owner`, `item_url`, `delta_features` 
 
 ---
 
-## Notes and limitations
+## 🛠️ Troubleshooting
 
-* Editor tracking fields do not backfill old features automatically.
-* Some layers may have tracking fields but still return null values until edited.
-* Sharing/groups are item-level (service), not per-sublayer.
+### “Editing not enabled for this table”
+
+Your audit table must support “Create” edits. The validator checks capabilities and exits if Create is missing. 
+
+### No records uploaded / no data collected
+
+* Verify credentials in `.env`
+* Confirm both portals are reachable
+* Try `TEST_MODE=True` with a known `TEST_ITEM_ID` 
+
+### Delta features always 0
+
+* Ensure your audit table has `delta_features`
+* Make sure it’s not the first run (previous records must exist for delta comparisons) 
 
 ---
 
-## Example output
+## 📁 Project structure
 
-* Logs saved under `./logs/`
-* Optional export of skipped layers under `./audit_exports_unchanged_data/`
+* `main.py` — entry point (connect, collect, transform, upload, summary) 
+* `collector.py` — searches items, collects sublayer metadata (parallelized) 
+* `audit_table_io.py` — validate table, previous snapshot, batch upload 
+* `transform_filter.py` — transforms dates, builds URLs, skip unchanged exports 
+* `fields_edit.py` — detects editor tracking fields + extracts edit users/dates 
+* `logging_utils.py` — log tee + cleanup old logs/exports 
+* `time_utils.py` — timezone-safe timestamp helpers + FY logic 
+* `update_tags_groups_items.py` — optional group-based tagging helper 
 
 ---
-What it’s used for (practical use cases)
 
-Typical uses include:
+## 📌 License / Usage
 
-1) Governance / Inventory checks (one-off reports)
+Internal automation / ops tooling. Customize freely for your org’s audit table schema and reporting needs.
 
-List all hosted services that are:
-
-public
-
-shared to org
-
-shared to specific groups
-
-Identify services that violate policy (e.g., public when they shouldn’t be)
-
-2) Troubleshooting audit results
-
-When the audit shows created_user / last_edited_user as NULL:
-
-confirm whether tracking fields exist
-
-confirm whether the fields are populated
-
-verify whether the layer is a view or source
-
-quickly inspect schema without running the full audit
-
-3) Admin diagnostics for collaboration / content lifecycle
-
-identify services in collaboration groups
-
-identify items missing the collab tag
-
-validate tag-based filtering works before an audit run
-
-4) Targeted remediation / quality control
-
-Instead of running changes org-wide, you can isolate:
-
-only items in a group
-
-only items updated in last X days
-
-only items with missing schema properties
-then validate safely.
+```
+```
